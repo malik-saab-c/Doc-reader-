@@ -183,22 +183,22 @@ jobs:
           RELEASE_TAG="debug-apk-build-${{ github.run_number }}-${{ github.run_attempt }}"
           RELEASE_TITLE="Debug APK Build #${{ github.run_number }}"
 
-          NOTES=$(cat <<'EOF'
-### Debug APK Build #${{ github.run_number }}
-
-- **Build Type**: Automatically generated debug APK
-- **Built By**: GitHub Actions
-- **Run Number**: ${{ github.run_number }}
-- **Run Attempt**: ${{ github.run_attempt }}
-- **Source Commit SHA**: ${{ github.sha }}
-- **Testing Notice**: This APK is intended for testing purposes only. It is not a Play Store production release and is signed only with a temporary debug keystore.
-EOF
-)
+          NOTES_FILE="${RUNNER_TEMP:-/tmp}/release-notes.md"
+          {
+            echo "### Debug APK Build #${{ github.run_number }}"
+            echo ""
+            echo "- **Build Type**: Automatically generated debug APK"
+            echo "- **Built By**: GitHub Actions"
+            echo "- **Run Number**: ${{ github.run_number }}"
+            echo "- **Run Attempt**: ${{ github.run_attempt }}"
+            echo "- **Source Commit SHA**: ${{ github.sha }}"
+            echo "- **Testing Notice**: This APK is intended for testing purposes only. It is not a Play Store production release and is signed only with a temporary debug keystore."
+          } > "$NOTES_FILE"
 
           gh release create "$RELEASE_TAG" "$ASSET_PATH" \
             --target "${{ github.sha }}" \
             --title "$RELEASE_TITLE" \
-            --notes "$NOTES" \
+            --notes-file "$NOTES_FILE" \
             --latest
 
       - name: Report APK download result
@@ -221,26 +221,26 @@ EOF
             echo "Release URL: $RELEASE_URL"
             echo "APK Asset Filename: $ASSET_NAME"
 
-            cat <<EOF >> "$GITHUB_STEP_SUMMARY"
-## ✅ Debug APK Build & Release Succeeded!
-
-- **Release Tag**: \`$RELEASE_TAG\`
-- **Release Title**: $RELEASE_TITLE
-- **Direct Release Page**: [$RELEASE_URL]($RELEASE_URL)
-- **APK Asset Filename**: \`$ASSET_NAME\`
-- **Download Instructions**: The APK can be downloaded directly on your phone or computer from the **Assets** section of the [GitHub Release]($RELEASE_URL).
-- **Backup Actions Artifact**: The standard GitHub Actions artifact named **\`app-debug-apk\`** is also available as a backup for this run.
-EOF
+            {
+              echo "## ✅ Debug APK Build & Release Succeeded!"
+              echo ""
+              echo "- **Release Tag**: \`$RELEASE_TAG\`"
+              echo "- **Release Title**: $RELEASE_TITLE"
+              echo "- **Direct Release Page**: [$RELEASE_URL]($RELEASE_URL)"
+              echo "- **APK Asset Filename**: \`$ASSET_NAME\`"
+              echo "- **Download Instructions**: The APK can be downloaded directly on your phone or computer from the **Assets** section of the [GitHub Release]($RELEASE_URL)."
+              echo "- **Backup Actions Artifact**: The standard GitHub Actions artifact named **\`app-debug-apk\`** is also available as a backup for this run."
+            } >> "$GITHUB_STEP_SUMMARY"
 
           else
             echo "::warning::GitHub Release publishing could not be completed or encountered an error."
             echo "APK build succeeded. The GitHub Actions artifact named 'app-debug-apk' remains available."
 
-            cat <<EOF >> "$GITHUB_STEP_SUMMARY"
-## ⚠️ Debug APK Build Succeeded (Release Publishing Warning)
-
-- **Build Status**: The debug APK was compiled and verified successfully.
-- **Actions Artifact**: The Actions artifact named **\`app-debug-apk\`** remains available for download directly from the GitHub Actions run summary.
-- **Release Note**: GitHub Release publishing could not be completed, but the APK build result is fully preserved as an Actions artifact.
-EOF
+            {
+              echo "## ⚠️ Debug APK Build Succeeded (Release Publishing Warning)"
+              echo ""
+              echo "- **Build Status**: The debug APK was compiled and verified successfully."
+              echo "- **Actions Artifact**: The Actions artifact named **\`app-debug-apk\`** remains available for download directly from the GitHub Actions run summary."
+              echo "- **Release Note**: GitHub Release publishing could not be completed, but the APK build result is fully preserved as an Actions artifact."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
