@@ -50,15 +50,29 @@ class FileAppViewModel(application: Application) : AndroidViewModel(application)
     private val _showSplash = MutableStateFlow(true)
     val showSplash: StateFlow<Boolean> = _showSplash.asStateFlow()
 
+    private val _isScanning = MutableStateFlow(false)
+    val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
+
     init {
         loadDocuments()
     }
 
     fun loadDocuments() {
         viewModelScope.launch(Dispatchers.IO) {
-            val docs = DocumentStorageManager.ensureSampleDocuments(getApplication())
-            _documents.value = docs
+            _isScanning.value = true
+            try {
+                val docs = DocumentStorageManager.scanAllReadableDocuments(getApplication())
+                _documents.value = docs
+            } catch (e: Exception) {
+                android.util.Log.e("FileAppViewModel", "Error scanning documents: ${e.message}", e)
+            } finally {
+                _isScanning.value = false
+            }
         }
+    }
+
+    fun refreshDocuments() {
+        loadDocuments()
     }
 
     fun dismissSplash() {
@@ -102,7 +116,7 @@ class FileAppViewModel(application: Application) : AndroidViewModel(application)
     fun deleteDocument(item: DocumentItem) {
         viewModelScope.launch(Dispatchers.IO) {
             DocumentStorageManager.deleteDocument(item)
-            val updated = DocumentStorageManager.loadAllDocuments(getApplication())
+            val updated = DocumentStorageManager.scanAllReadableDocuments(getApplication())
             _documents.value = updated
             if (_activeDocument.value?.id == item.id) {
                 _activeDocument.value = null
@@ -114,7 +128,7 @@ class FileAppViewModel(application: Application) : AndroidViewModel(application)
         viewModelScope.launch(Dispatchers.IO) {
             val doc = DocumentStorageManager.importFileFromUri(getApplication(), uri)
             if (doc != null) {
-                val updated = DocumentStorageManager.loadAllDocuments(getApplication())
+                val updated = DocumentStorageManager.scanAllReadableDocuments(getApplication())
                 _documents.value = updated
                 _activeDocument.value = doc
             }
@@ -137,7 +151,7 @@ class FileAppViewModel(application: Application) : AndroidViewModel(application)
             )
 
             if (success) {
-                val updated = DocumentStorageManager.loadAllDocuments(getApplication())
+                val updated = DocumentStorageManager.scanAllReadableDocuments(getApplication())
                 _documents.value = updated
                 val created = updated.firstOrNull { it.filePath == pdfFile.absolutePath }
                 if (created != null) _activeDocument.value = created
@@ -156,7 +170,7 @@ class FileAppViewModel(application: Application) : AndroidViewModel(application)
                 extension = "csv"
             )
             if (doc != null) {
-                val updated = DocumentStorageManager.loadAllDocuments(getApplication())
+                val updated = DocumentStorageManager.scanAllReadableDocuments(getApplication())
                 _documents.value = updated
                 _activeDocument.value = doc
             }
@@ -173,7 +187,7 @@ class FileAppViewModel(application: Application) : AndroidViewModel(application)
                 extension = ext
             )
             if (doc != null) {
-                val updated = DocumentStorageManager.loadAllDocuments(getApplication())
+                val updated = DocumentStorageManager.scanAllReadableDocuments(getApplication())
                 _documents.value = updated
                 _activeDocument.value = doc
             }
@@ -185,7 +199,7 @@ class FileAppViewModel(application: Application) : AndroidViewModel(application)
             val file = File(doc.filePath)
             if (file.exists()) {
                 file.writeText(newContent)
-                val updated = DocumentStorageManager.loadAllDocuments(getApplication())
+                val updated = DocumentStorageManager.scanAllReadableDocuments(getApplication())
                 _documents.value = updated
                 _activeDocument.value = doc.copy(
                     sizeBytes = file.length(),

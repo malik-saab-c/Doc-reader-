@@ -2,6 +2,9 @@ package com.example.engine
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Log
 import com.example.model.DocumentItem
@@ -21,17 +24,25 @@ object DocumentStorageManager {
         // 1. Generate real offline multi-page PDF
         val pdfFile = File(docsDir, "Executive_Financial_Report_2026.pdf")
         if (!pdfFile.exists() || pdfFile.length() == 0L) {
-            PdfEngine.createPdfDocument(
-                outputFile = pdfFile,
-                title = "All File Reader Executive Report",
-                author = "Sir Ghulam Mustafa",
-                contentSections = listOf(
-                    "1. Executive Summary" to "This document demonstrates the ultra-fast native offline document engine created by Sir Ghulam Mustafa. The application operates with zero internet requirement and delivers instantaneous page rendering with hardware acceleration.",
-                    "2. Performance & Footprint" to "Engine size is maintained strictly under 25 MB while providing support for PDF, DOCX, XLSX, PPTX, CSV, and code formats. All rendering operates locally on device without external cloud dependencies.",
-                    "3. Architectural Superiority" to "Using native Android hardware rendering and streaming zip decoders, document loading achieves microsecond latency with complete memory safety.",
-                    "4. Security & Privacy" to "Zero data leaves the device. Everything stays 100% encrypted and local on internal storage with complete compliance with privacy best practices."
+            try {
+                PdfEngine.createPdfDocument(
+                    outputFile = pdfFile,
+                    title = "All File Reader Executive Report",
+                    author = "Sir Ghulam Mustafa",
+                    contentSections = listOf(
+                        "1. Executive Summary" to "This document demonstrates the ultra-fast native offline document engine created by Sir Ghulam Mustafa. The application operates with zero internet requirement and delivers instantaneous page rendering with hardware acceleration.",
+                        "2. Performance & Footprint" to "Engine size is maintained strictly under 25 MB while providing support for PDF, DOCX, XLSX, PPTX, CSV, and code formats. All rendering operates locally on device without external cloud dependencies.",
+                        "3. Architectural Superiority" to "Using native Android hardware rendering and streaming zip decoders, document loading achieves microsecond latency with complete memory safety.",
+                        "4. Security & Privacy" to "Zero data leaves the device. Everything stays 100% encrypted and local on internal storage with complete compliance with privacy best practices."
+                    )
                 )
-            )
+            } catch (e: Throwable) {
+                Log.w(TAG, "Sample PDF generation exception: ${e.message}")
+            }
+
+            if (!pdfFile.exists() || pdfFile.length() == 0L) {
+                pdfFile.writeText("%PDF-1.4\n%All File Reader Offline Document\n%%EOF")
+            }
         }
 
         // 2. Sample Financial CSV spreadsheet
@@ -251,6 +262,176 @@ Welcome to the Universal File Reader & Editor engineered by developer **Sir Ghul
         } catch (e: Exception) {
             Log.e(TAG, "Error deleting file: ${e.message}", e)
             false
+        }
+    }
+
+    /**
+     * Automatically scans and fetches all readable PDF, PPT, DOCX, XLS, and other document
+     * files from MediaStore, external storage public directories, and app internal storage.
+     */
+    fun scanAllReadableDocuments(context: Context): List<DocumentItem> {
+        ensureSampleDocuments(context)
+        val documentMap = LinkedHashMap<String, DocumentItem>()
+
+        // 1. Load app internal documents first
+        val internalDocs = loadAllDocuments(context)
+        for (doc in internalDocs) {
+            documentMap[doc.filePath] = doc
+        }
+
+        // 2. Query MediaStore for indexed device documents
+        val mediaDocs = queryMediaStoreDocuments(context)
+        for (doc in mediaDocs) {
+            documentMap[doc.filePath] = doc
+        }
+
+        // 3. Scan well-known storage directories (Downloads, Documents, WhatsApp docs, etc.)
+        val storageDocs = scanCommonDirectories(context)
+        for (doc in storageDocs) {
+            documentMap[doc.filePath] = doc
+        }
+
+        return documentMap.values.sortedByDescending { it.lastModified }
+    }
+
+    private val READABLE_EXTENSIONS = setOf(
+        "pdf", "docx", "doc", "rtf", "odt", "dot", "dotx", "docm",
+        "pptx", "ppt", "odp", "pps", "ppsx", "pptm",
+        "xlsx", "xls", "csv", "tsv", "xlsm",
+        "txt", "md", "json", "xml", "html", "kt", "java", "py", "js", "ts", "css", "sql", "log", "yaml", "yml"
+    )
+
+    private fun queryMediaStoreDocuments(context: Context): List<DocumentItem> {
+        val items = mutableListOf<DocumentItem>()
+        val projection = arrayOf(
+            MediaStore.Files.FileColumns._ID,
+            MediaStore.Files.FileColumns.DATA,
+            MediaStore.Files.FileColumns.DISPLAY_NAME,
+            MediaStore.Files.FileColumns.SIZE,
+            MediaStore.Files.FileColumns.DATE_MODIFIED
+        )
+
+        try {
+            val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                MediaStore.Files.getContentUri(MediaStore.VOLUME_EXTERNAL)
+            } else {
+                MediaStore.Files.getContentUri("external")
+            }
+
+            context.contentResolver.query(
+                uri,
+                projection,
+                "${MediaStore.Files.FileColumns.SIZE} > 0",
+                null,
+                "${MediaStore.Files.FileColumns.DATE_MODIFIED} DESC"
+            )?.use { cursor ->
+                val dataCol = cursor.getColumnIndex(MediaStore.Files.FileColumns.DATA)
+                val nameCol = cursor.getColumnIndex(MediaStore.Files.FileColumns.DISPLAY_NAME)
+                val sizeCol = cursor.getColumnIndex(MediaStore.Files.FileColumns.SIZE)
+                val dateCol = cursor.getColumnIndex(MediaStore.Files.FileColumns.DATE_MODIFIED)
+
+                while (cursor.moveToNext() && items.size < 3000) {
+                    val path = if (dataCol != -1) cursor.getString(dataCol) else null
+                    val name = if (nameCol != -1) cursor.getString(nameCol) else null
+                    val size = if (sizeCol != -1) cursor.getLong(sizeCol) else 0L
+                    val dateSec = if (dateCol != -1) cursor.getLong(dateCol) else 0L
+
+                    val displayName = name ?: (path?.let { File(it).name } ?: "Document")
+                    val ext = displayName.substringAfterLast('.', "").lowercase()
+
+                    if (READABLE_EXTENSIONS.contains(ext) && !path.isNullOrBlank()) {
+                        val file = File(path)
+                        val exists = try { file.exists() } catch (e: Exception) { false }
+                        if (exists || path.isNotBlank()) {
+                            val type = DocumentType.fromExtension(ext)
+                            items.add(
+                                DocumentItem(
+                                    id = path,
+                                    name = displayName,
+                                    extension = ext,
+                                    type = type,
+                                    sizeBytes = if (size > 0) size else file.length(),
+                                    lastModified = if (dateSec > 0) dateSec * 1000L else file.lastModified(),
+                                    isFavorite = false,
+                                    filePath = path,
+                                    previewSnippet = "${type.label} Document",
+                                    isSample = false
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error querying MediaStore documents: ${e.message}", e)
+        }
+        return items
+    }
+
+    private fun scanCommonDirectories(context: Context): List<DocumentItem> {
+        val items = mutableListOf<DocumentItem>()
+        val dirsToScan = mutableListOf<File>()
+
+        try {
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)?.let { dirsToScan.add(it) }
+            Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOCUMENTS)?.let { dirsToScan.add(it) }
+            val rootExt = Environment.getExternalStorageDirectory()
+            if (rootExt != null && rootExt.exists()) {
+                dirsToScan.add(File(rootExt, "Download"))
+                dirsToScan.add(File(rootExt, "Downloads"))
+                dirsToScan.add(File(rootExt, "Documents"))
+                dirsToScan.add(File(rootExt, "WhatsApp/Media/WhatsApp Documents"))
+                dirsToScan.add(File(rootExt, "Telegram/Telegram Documents"))
+                dirsToScan.add(File(rootExt, "Android/media/com.whatsapp/WhatsApp/Media/WhatsApp Documents"))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error collecting storage directories: ${e.message}")
+        }
+
+        for (dir in dirsToScan) {
+            if (dir.exists() && dir.canRead()) {
+                scanDirRecursive(dir, items, maxDepth = 3, currentDepth = 0)
+            }
+        }
+
+        return items
+    }
+
+    private fun scanDirRecursive(
+        dir: File,
+        results: MutableList<DocumentItem>,
+        maxDepth: Int,
+        currentDepth: Int
+    ) {
+        if (currentDepth > maxDepth || results.size >= 3000) return
+        val files = dir.listFiles() ?: return
+
+        for (file in files) {
+            if (file.isDirectory) {
+                val name = file.name
+                if (!name.startsWith(".") && name != "Android" && name != "data" && name != "cache") {
+                    scanDirRecursive(file, results, maxDepth, currentDepth + 1)
+                }
+            } else if (file.isFile) {
+                val ext = file.extension.lowercase()
+                if (READABLE_EXTENSIONS.contains(ext) && file.length() > 0L) {
+                    val type = DocumentType.fromExtension(ext)
+                    results.add(
+                        DocumentItem(
+                            id = file.absolutePath,
+                            name = file.name,
+                            extension = ext,
+                            type = type,
+                            sizeBytes = file.length(),
+                            lastModified = file.lastModified(),
+                            isFavorite = false,
+                            filePath = file.absolutePath,
+                            previewSnippet = "${type.label} Document",
+                            isSample = false
+                        )
+                    )
+                }
+            }
         }
     }
 }

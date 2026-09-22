@@ -37,6 +37,7 @@ class MainActivity : ComponentActivity() {
                 val searchQuery by viewModel.searchQuery.collectAsState()
                 val sortBy by viewModel.sortBy.collectAsState()
                 val showFavoritesOnly by viewModel.showOnlyFavorites.collectAsState()
+                val isScanning by viewModel.isScanning.collectAsState()
 
                 Crossfade(
                     targetState = Pair(showSplash, activeDoc),
@@ -123,6 +124,8 @@ class MainActivity : ComponentActivity() {
                                 searchQuery = searchQuery,
                                 sortBy = sortBy,
                                 showFavoritesOnly = showFavoritesOnly,
+                                isScanning = isScanning,
+                                onRefreshDocuments = { viewModel.refreshDocuments() },
                                 onSelectCategory = { viewModel.setCategory(it) },
                                 onSearchChange = { viewModel.setSearchQuery(it) },
                                 onSortChange = { viewModel.setSortBy(it) },

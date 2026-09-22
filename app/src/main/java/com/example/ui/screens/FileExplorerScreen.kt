@@ -3,9 +3,11 @@ package com.example.ui.screens
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -34,6 +36,7 @@ import androidx.core.content.FileProvider
 import com.example.model.DocumentItem
 import com.example.model.DocumentType
 import com.example.ui.theme.*
+import com.example.util.StoragePermissionHelper
 import com.example.viewmodel.SortOption
 import java.io.File
 
@@ -45,6 +48,8 @@ fun FileExplorerScreen(
     searchQuery: String,
     sortBy: SortOption,
     showFavoritesOnly: Boolean,
+    isScanning: Boolean = false,
+    onRefreshDocuments: () -> Unit = {},
     onSelectCategory: (DocumentType?) -> Unit,
     onSearchChange: (String) -> Unit,
     onSortChange: (SortOption) -> Unit,
@@ -64,6 +69,53 @@ fun FileExplorerScreen(
     var inspectItem by remember { mutableStateOf<DocumentItem?>(null) }
     var showAppInfoDialog by remember { mutableStateOf(false) }
     var showSortMenu by remember { mutableStateOf(false) }
+
+    // Storage permission tracking
+    var hasStorageAccess by remember {
+        mutableStateOf(StoragePermissionHelper.hasFullStorageAccess(context))
+    }
+
+    val legacyStoragePermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        val granted = permissions.values.any { it }
+        if (granted || StoragePermissionHelper.hasFullStorageAccess(context)) {
+            hasStorageAccess = true
+            onRefreshDocuments()
+        }
+    }
+
+    val manageStorageLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartActivityForResult()
+    ) {
+        val granted = StoragePermissionHelper.hasFullStorageAccess(context)
+        hasStorageAccess = granted
+        if (granted) {
+            onRefreshDocuments()
+        }
+    }
+
+    fun requestCompleteStorageAccess() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            try {
+                manageStorageLauncher.launch(StoragePermissionHelper.createManageStorageIntent(context))
+            } catch (e: Exception) {
+                legacyStoragePermissionLauncher.launch(
+                    arrayOf(
+                        android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                        android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+                    )
+                )
+            }
+        } else {
+            legacyStoragePermissionLauncher.launch(
+                arrayOf(
+                    android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                    android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+                )
+            )
+        }
+    }
 
     // System File Picker for opening external documents offline
     val filePickerLauncher = rememberLauncherForActivityResult(
@@ -139,6 +191,31 @@ fun FileExplorerScreen(
                     }
                 },
                 actions = {
+                    // Refresh / Scan documents button
+                    IconButton(
+                        onClick = {
+                            if (!hasStorageAccess) {
+                                requestCompleteStorageAccess()
+                            }
+                            onRefreshDocuments()
+                        },
+                        modifier = Modifier.testTag("scan_storage_button")
+                    ) {
+                        if (isScanning) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(18.dp),
+                                strokeWidth = 2.dp,
+                                color = BrandAccent
+                            )
+                        } else {
+                            Icon(
+                                imageVector = Icons.Default.Refresh,
+                                contentDescription = "Scan Storage",
+                                tint = BrandAccent
+                            )
+                        }
+                    }
+
                     // Replay splash screen animation
                     IconButton(onClick = onReplaySplash, modifier = Modifier.testTag("replay_splash_button")) {
                         Icon(
@@ -248,6 +325,76 @@ fun FileExplorerScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
+            // Scanning progress indicator
+            if (isScanning) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp),
+                    color = BrandAccent,
+                    trackColor = CardBorderSubtle
+                )
+            }
+
+            // Storage permission prompt card if full access not granted
+            if (!hasStorageAccess) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .testTag("storage_permission_card"),
+                    shape = RoundedCornerShape(14.dp),
+                    colors = CardDefaults.cardColors(containerColor = SoftSurface),
+                    border = BorderStroke(1.dp, CardBorder)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(RoundedCornerShape(10.dp))
+                                .background(PureWhite),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.FolderSpecial,
+                                contentDescription = null,
+                                tint = BrandAccent,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "Full Storage Access",
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = "Find & load all PDF, Word, PowerPoint, and Excel files on this phone automatically.",
+                                fontSize = 11.sp,
+                                color = TextSecondary,
+                                lineHeight = 14.sp
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = { requestCompleteStorageAccess() },
+                            colors = ButtonDefaults.buttonColors(containerColor = BrandPrimary),
+                            shape = RoundedCornerShape(8.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
+                            modifier = Modifier.testTag("grant_storage_button")
+                        ) {
+                            Text("Grant", fontSize = 12.sp, color = PureWhite, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                }
+            }
             // Search Input Field
             OutlinedTextField(
                 value = searchQuery,
