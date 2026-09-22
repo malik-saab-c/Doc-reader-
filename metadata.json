@@ -1,0 +1,6 @@
+{
+  "name": "All File Reader",
+  "description": "Offline all-format document reader, viewer, and editor for PDF, DOCX, XLSX, PPTX, CSV, and code files with an elegant white theme.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
