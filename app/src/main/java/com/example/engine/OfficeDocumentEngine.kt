@@ -13,6 +13,7 @@ import java.io.InputStream
 import java.io.PushbackInputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipInputStream
+import java.util.zip.ZipOutputStream
 
 enum class SectionType {
     TITLE,
@@ -51,22 +52,62 @@ enum class SlideLayout {
     SECTION_HEADER,
     TWO_COLUMN,
     COMPARISON,
+    BIG_STAT,
     BLANK
 }
+
+enum class SlideElementType {
+    TITLE,
+    SUBTITLE,
+    TEXT_BOX,
+    BULLET_LIST,
+    IMAGE,
+    TABLE,
+    STAT_HERO
+}
+
+data class SlideElement(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val type: SlideElementType = SlideElementType.TEXT_BOX,
+    val text: String = "",
+    val bulletPoints: List<String> = emptyList(),
+    // Normalized coordinates (0.0f - 1.0f relative to slide bounds)
+    val normX: Float = 0.05f,
+    val normY: Float = 0.05f,
+    val normW: Float = 0.9f,
+    val normH: Float = 0.2f,
+    // Styling & Typography
+    val fontSizeSp: Float = 16f,
+    val isBold: Boolean = false,
+    val isItalic: Boolean = false,
+    val textAlign: String = "LEFT", // "LEFT", "CENTER", "RIGHT"
+    val fontColorHex: String? = null,
+    val backgroundColorHex: String? = null,
+    val borderColorHex: String? = null,
+    // Embedded image bytes (if type == IMAGE)
+    val imageBytes: ByteArray? = null,
+    // Embedded table rows (if type == TABLE)
+    val tableRows: List<List<String>> = emptyList()
+)
 
 data class SlideItem(
     val slideNumber: Int,
     val title: String,
-    val bulletPoints: List<String>,
+    val bulletPoints: List<String> = emptyList(),
     val notes: String = "",
     val subtitle: String = "",
     val categoryTag: String = "",
-    val layoutType: SlideLayout = SlideLayout.TITLE_AND_CONTENT
+    val layoutType: SlideLayout = SlideLayout.TITLE_AND_CONTENT,
+    val backgroundColorHex: String? = null,
+    val elements: List<SlideElement> = emptyList(),
+    val aspectRatio: Float = 16f / 9f
 )
 
 data class PresentationData(
     val title: String,
-    val slides: List<SlideItem>
+    val slides: List<SlideItem>,
+    val slideWidthEmu: Long = 12192000L,
+    val slideHeightEmu: Long = 6858000L
 )
 
 object OfficeDocumentEngine {
@@ -357,31 +398,56 @@ object OfficeDocumentEngine {
     }
 
     /**
-     * Pure Kotlin OpenXML PPTX parser extracting slide titles and bullet points.
-     * Fixes slide index parsing bug where slides collapsed into a single slide.
+     * Pure Kotlin OpenXML PPTX parser extracting slide dimensions, shape coordinates,
+     * embedded images, tables, font sizes, colors, and structured slide hierarchy.
      */
     fun parsePptx(inputStream: InputStream, title: String): PresentationData {
-        val slideMap = mutableMapOf<Int, SlideItem>()
+        val slideXmlMap = mutableMapOf<Int, ByteArray>()
+        val slideRelsMap = mutableMapOf<Int, MutableMap<String, String>>()
+        val mediaMap = mutableMapOf<String, ByteArray>()
+        var sldWidthEmu = 12192000L // Default 16:9 widescreen
+        var sldHeightEmu = 6858000L
 
         try {
             val zis = ZipInputStream(inputStream)
             var entry: ZipEntry? = zis.nextEntry
             var entryCounter = 1
 
-            while (entry != null && slideMap.size < MAX_SLIDES) {
+            while (entry != null && slideXmlMap.size < MAX_SLIDES) {
                 val name = entry.name.lowercase()
-                if (name.startsWith("ppt/slides/slide") && name.endsWith(".xml")) {
-                    // Safely extract slide number from filename: ppt/slides/slide12.xml -> 12
-                    val afterSlide = name.substringAfterLast("slide")
-                    val numStr = afterSlide.substringBefore(".xml")
-                    val slideNum = numStr.toIntOrNull() ?: entryCounter
-
-                    val slideBytes = readEntryBytesBounded(zis, 2 * 1024 * 1024)
-                    if (slideBytes.isNotEmpty()) {
-                        val slideItem = parseSlideXml(slideBytes, slideNum)
-                        slideMap[slideNum] = slideItem
+                when {
+                    name == "ppt/presentation.xml" -> {
+                        val pBytes = readEntryBytesBounded(zis, 1024 * 1024)
+                        val dims = parsePresentationDimensions(pBytes)
+                        if (dims != null) {
+                            sldWidthEmu = dims.first
+                            sldHeightEmu = dims.second
+                        }
                     }
-                    entryCounter++
+                    name.startsWith("ppt/media/") -> {
+                        val mediaKey = entry.name.substringAfter("ppt/").trimStart('/')
+                        val bytes = readEntryBytesBounded(zis, 4 * 1024 * 1024)
+                        if (bytes.isNotEmpty()) {
+                            mediaMap[mediaKey] = bytes
+                            mediaMap[entry.name] = bytes
+                        }
+                    }
+                    name.startsWith("ppt/slides/_rels/slide") && name.endsWith(".xml.rels") -> {
+                        val slidePart = name.substringAfterLast("slide").substringBefore(".xml.rels")
+                        val slideNum = slidePart.toIntOrNull() ?: entryCounter
+                        val relBytes = readEntryBytesBounded(zis, 512 * 1024)
+                        val rels = parseRelsXml(relBytes)
+                        slideRelsMap[slideNum] = rels
+                    }
+                    name.startsWith("ppt/slides/slide") && name.endsWith(".xml") -> {
+                        val slidePart = name.substringAfterLast("slide").substringBefore(".xml")
+                        val slideNum = slidePart.toIntOrNull() ?: entryCounter
+                        val slideBytes = readEntryBytesBounded(zis, 3 * 1024 * 1024)
+                        if (slideBytes.isNotEmpty()) {
+                            slideXmlMap[slideNum] = slideBytes
+                        }
+                        entryCounter++
+                    }
                 }
                 zis.closeEntry()
                 entry = zis.nextEntry
@@ -391,53 +457,362 @@ object OfficeDocumentEngine {
             Log.e(TAG, "Error reading PPTX zip: ${e.message}", e)
         }
 
-        if (slideMap.isEmpty()) return emptyPresentation(title, "No presentation slides found.")
+        if (slideXmlMap.isEmpty()) return emptyPresentation(title, "No presentation slides found.")
 
-        val sortedSlides = slideMap.keys.sorted().map { slideMap[it]!! }
-        return PresentationData(title = title, slides = sortedSlides)
+        val slideItems = mutableListOf<SlideItem>()
+        val sortedSlideNums = slideXmlMap.keys.sorted()
+
+        val aspectRatio = if (sldHeightEmu > 0) sldWidthEmu.toFloat() / sldHeightEmu.toFloat() else 16f / 9f
+
+        for (slideNum in sortedSlideNums) {
+            val xmlBytes = slideXmlMap[slideNum] ?: continue
+            val rels = slideRelsMap[slideNum] ?: emptyMap()
+            val item = parseSlideXmlAccurate(
+                xmlBytes = xmlBytes,
+                slideNum = slideNum,
+                sldWidth = sldWidthEmu,
+                sldHeight = sldHeightEmu,
+                rels = rels,
+                mediaMap = mediaMap,
+                aspectRatio = aspectRatio
+            )
+            slideItems.add(item)
+        }
+
+        return PresentationData(
+            title = title,
+            slides = slideItems,
+            slideWidthEmu = sldWidthEmu,
+            slideHeightEmu = sldHeightEmu
+        )
     }
 
-    private fun parseSlideXml(xmlBytes: ByteArray, slideNum: Int): SlideItem {
-        val paragraphs = mutableListOf<String>()
+    private fun parsePresentationDimensions(xmlBytes: ByteArray): Pair<Long, Long>? {
+        return try {
+            val parser = Xml.newPullParser()
+            parser.setInput(ByteArrayInputStream(xmlBytes), "UTF-8")
+            var eventType = parser.eventType
+            while (eventType != XmlPullParser.END_DOCUMENT) {
+                if (eventType == XmlPullParser.START_TAG) {
+                    val local = parser.name?.substringAfterLast(":") ?: ""
+                    if (local == "sldSz") {
+                        val cx = parser.getAttributeValue(null, "cx")?.toLongOrNull()
+                        val cy = parser.getAttributeValue(null, "cy")?.toLongOrNull()
+                        if (cx != null && cy != null && cx > 0 && cy > 0) {
+                            return Pair(cx, cy)
+                        }
+                    }
+                }
+                eventType = parser.next()
+            }
+            null
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun parseRelsXml(xmlBytes: ByteArray): MutableMap<String, String> {
+        val rels = mutableMapOf<String, String>()
+        try {
+            val parser = Xml.newPullParser()
+            parser.setInput(ByteArrayInputStream(xmlBytes), "UTF-8")
+            var eventType = parser.eventType
+            while (eventType != XmlPullParser.END_DOCUMENT) {
+                if (eventType == XmlPullParser.START_TAG) {
+                    val local = parser.name?.substringAfterLast(":") ?: ""
+                    if (local == "Relationship") {
+                        val id = parser.getAttributeValue(null, "Id")
+                        val target = parser.getAttributeValue(null, "Target")
+                        if (id != null && target != null) {
+                            rels[id] = target
+                        }
+                    }
+                }
+                eventType = parser.next()
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error parsing rels: ${e.message}")
+        }
+        return rels
+    }
+
+    private fun parseSlideXmlAccurate(
+        xmlBytes: ByteArray,
+        slideNum: Int,
+        sldWidth: Long,
+        sldHeight: Long,
+        rels: Map<String, String>,
+        mediaMap: Map<String, ByteArray>,
+        aspectRatio: Float
+    ): SlideItem {
+        val elements = mutableListOf<SlideElement>()
+        val allParagraphs = mutableListOf<String>()
+
         try {
             val parser = Xml.newPullParser()
             parser.setInput(ByteArrayInputStream(xmlBytes), "UTF-8")
             var eventType = parser.eventType
 
-            var inP = false
-            var inT = false
-            val currentP = StringBuilder()
+            // Shape parsing context
+            var inShape = false
+            var inPic = false
+            var inTable = false
+            var currentShapeName = ""
+            var currentShapePlaceholderType = ""
 
-            while (eventType != XmlPullParser.END_DOCUMENT && paragraphs.size < MAX_BULLETS_PER_SLIDE + 5) {
+            // Coordinates in EMUs
+            var currentOffX = 0L
+            var currentOffY = 0L
+            var currentExtCX = 0L
+            var currentExtCY = 0L
+            var currentShapeBgColor: String? = null
+
+            // Text inside current shape
+            val shapeParagraphs = mutableListOf<String>()
+            val shapeBulletPoints = mutableListOf<String>()
+            var currentPAlign = "LEFT"
+            var currentPText = StringBuilder()
+            var currentPFontSizeSp = 16f
+            var currentPIsBold = false
+            var currentPIsItalic = false
+            var currentPFontColor: String? = null
+
+            // Image context
+            var currentBlipEmbedId: String? = null
+
+            // Table context
+            val currentTableRows = mutableListOf<MutableList<String>>()
+            var currentTableRow = mutableListOf<String>()
+            var currentTableCellText = StringBuilder()
+            var inTableCell = false
+
+            while (eventType != XmlPullParser.END_DOCUMENT) {
                 val rawName = parser.name ?: ""
-                val localName = rawName.substringAfterLast(":")
+                val local = rawName.substringAfterLast(":")
+
                 when (eventType) {
                     XmlPullParser.START_TAG -> {
-                        if (localName == "p") {
-                            inP = true
-                            currentP.setLength(0)
-                        } else if (localName == "t") {
-                            inT = true
-                        }
-                    }
-                    XmlPullParser.TEXT -> {
-                        if (inT) {
-                            val text = parser.text
-                            if (!text.isNullOrEmpty()) {
-                                currentP.append(text)
+                        when (local) {
+                            "sp" -> {
+                                inShape = true
+                                currentShapeName = ""
+                                currentShapePlaceholderType = ""
+                                currentOffX = 0L
+                                currentOffY = 0L
+                                currentExtCX = 0L
+                                currentExtCY = 0L
+                                currentShapeBgColor = null
+                                shapeParagraphs.clear()
+                                shapeBulletPoints.clear()
+                            }
+                            "pic" -> {
+                                inPic = true
+                                currentOffX = 0L
+                                currentOffY = 0L
+                                currentExtCX = 0L
+                                currentExtCY = 0L
+                                currentBlipEmbedId = null
+                            }
+                            "graphicFrame" -> {
+                                inTable = true
+                                currentOffX = 0L
+                                currentOffY = 0L
+                                currentExtCX = 0L
+                                currentExtCY = 0L
+                                currentTableRows.clear()
+                            }
+                            "cNvPr" -> {
+                                currentShapeName = parser.getAttributeValue(null, "name") ?: ""
+                            }
+                            "ph" -> {
+                                currentShapePlaceholderType = parser.getAttributeValue(null, "type") ?: "body"
+                            }
+                            "off" -> {
+                                val x = parser.getAttributeValue(null, "x")?.toLongOrNull() ?: 0L
+                                val y = parser.getAttributeValue(null, "y")?.toLongOrNull() ?: 0L
+                                currentOffX = x
+                                currentOffY = y
+                            }
+                            "ext" -> {
+                                val cx = parser.getAttributeValue(null, "cx")?.toLongOrNull() ?: 0L
+                                val cy = parser.getAttributeValue(null, "cy")?.toLongOrNull() ?: 0L
+                                if (cx > 0 && cy > 0) {
+                                    currentExtCX = cx
+                                    currentExtCY = cy
+                                }
+                            }
+                            "srgbClr" -> {
+                                val colorVal = parser.getAttributeValue(null, "val")
+                                if (colorVal != null && colorVal.length == 6) {
+                                    if (currentPText.isEmpty() && currentPFontColor == null) {
+                                        currentPFontColor = "#$colorVal"
+                                    } else if (currentShapeBgColor == null) {
+                                        currentShapeBgColor = "#$colorVal"
+                                    }
+                                }
+                            }
+                            "pPr" -> {
+                                val algn = parser.getAttributeValue(null, "algn")
+                                currentPAlign = when (algn) {
+                                    "ctr" -> "CENTER"
+                                    "r" -> "RIGHT"
+                                    "just" -> "JUSTIFY"
+                                    else -> "LEFT"
+                                }
+                            }
+                            "rPr" -> {
+                                val sz = parser.getAttributeValue(null, "sz")?.toIntOrNull()
+                                if (sz != null && sz > 0) {
+                                    currentPFontSizeSp = (sz / 100f).coerceIn(10f, 60f)
+                                }
+                                val b = parser.getAttributeValue(null, "b")
+                                if (b == "1" || b == "true") currentPIsBold = true
+                                val i = parser.getAttributeValue(null, "i")
+                                if (i == "1" || i == "true") currentPIsItalic = true
+                            }
+                            "p" -> {
+                                currentPText.setLength(0)
+                            }
+                            "blip" -> {
+                                val embed = parser.getAttributeValue("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "embed")
+                                    ?: parser.getAttributeValue(null, "r:embed")
+                                    ?: parser.getAttributeValue(null, "embed")
+                                if (embed != null) {
+                                    currentBlipEmbedId = embed
+                                }
+                            }
+                            "tr" -> {
+                                currentTableRow = mutableListOf()
+                            }
+                            "tc" -> {
+                                inTableCell = true
+                                currentTableCellText.setLength(0)
                             }
                         }
                     }
+
+                    XmlPullParser.TEXT -> {
+                        val text = parser.text
+                        if (!text.isNullOrEmpty()) {
+                            if (inTableCell) {
+                                currentTableCellText.append(text)
+                            } else {
+                                currentPText.append(text)
+                            }
+                        }
+                    }
+
                     XmlPullParser.END_TAG -> {
-                        if (localName == "t") {
-                            inT = false
-                        } else if (localName == "p") {
-                            inP = false
-                            val t = currentP.toString().trim()
-                            if (t.isNotEmpty() && !paragraphs.contains(t)) {
-                                // Cap individual point length to 1000 chars for layout safety
-                                val safeText = if (t.length > 1000) t.take(1000) + "..." else t
-                                paragraphs.add(safeText)
+                        when (local) {
+                            "p" -> {
+                                val pt = currentPText.toString().trim()
+                                if (pt.isNotEmpty()) {
+                                    shapeParagraphs.add(pt)
+                                    if (pt.startsWith("•") || pt.startsWith("-") || pt.startsWith("*") || shapeParagraphs.size > 1) {
+                                        shapeBulletPoints.add(pt.trimStart('•', '-', '*', ' '))
+                                    }
+                                    allParagraphs.add(pt)
+                                }
+                            }
+                            "tc" -> {
+                                inTableCell = false
+                                currentTableRow.add(currentTableCellText.toString().trim())
+                            }
+                            "tr" -> {
+                                if (currentTableRow.isNotEmpty()) {
+                                    currentTableRows.add(currentTableRow.toMutableList())
+                                }
+                            }
+                            "sp" -> {
+                                inShape = false
+                                if (shapeParagraphs.isNotEmpty()) {
+                                    val isTitle = currentShapePlaceholderType.contains("title", ignoreCase = true) ||
+                                            currentShapeName.contains("title", ignoreCase = true) ||
+                                            (elements.none { it.type == SlideElementType.TITLE } && currentOffY < sldHeight * 0.35f && currentPFontSizeSp >= 18f)
+
+                                    val isSubtitle = currentShapePlaceholderType.contains("sub", ignoreCase = true) ||
+                                            currentShapeName.contains("sub", ignoreCase = true)
+
+                                    val normX = if (sldWidth > 0 && currentExtCX > 0) (currentOffX.toFloat() / sldWidth).coerceIn(0f, 0.95f) else 0.06f
+                                    val normY = if (sldHeight > 0 && currentExtCY > 0) (currentOffY.toFloat() / sldHeight).coerceIn(0f, 0.95f) else 0.10f
+                                    val normW = if (sldWidth > 0 && currentExtCX > 0) (currentExtCX.toFloat() / sldWidth).coerceIn(0.04f, 0.98f) else 0.88f
+                                    val normH = if (sldHeight > 0 && currentExtCY > 0) (currentExtCY.toFloat() / sldHeight).coerceIn(0.02f, 0.98f) else 0.20f
+
+                                    val elType = when {
+                                        isTitle -> SlideElementType.TITLE
+                                        isSubtitle -> SlideElementType.SUBTITLE
+                                        shapeBulletPoints.size >= 2 -> SlideElementType.BULLET_LIST
+                                        else -> SlideElementType.TEXT_BOX
+                                    }
+
+                                    elements.add(
+                                        SlideElement(
+                                            type = elType,
+                                            text = shapeParagraphs.joinToString("\n"),
+                                            bulletPoints = shapeBulletPoints.toList(),
+                                            normX = normX,
+                                            normY = normY,
+                                            normW = normW,
+                                            normH = normH,
+                                            fontSizeSp = currentPFontSizeSp,
+                                            isBold = currentPIsBold || isTitle,
+                                            isItalic = currentPIsItalic,
+                                            textAlign = currentPAlign,
+                                            fontColorHex = currentPFontColor,
+                                            backgroundColorHex = currentShapeBgColor
+                                        )
+                                    )
+                                }
+                            }
+                            "pic" -> {
+                                inPic = false
+                                val embedId = currentBlipEmbedId
+                                if (embedId != null) {
+                                    val relTarget = rels[embedId]
+                                    val mediaKey = when {
+                                        relTarget == null -> null
+                                        relTarget.startsWith("../media/") -> "media/" + relTarget.removePrefix("../media/")
+                                        relTarget.startsWith("media/") -> relTarget
+                                        else -> relTarget.substringAfterLast("/")
+                                    }
+                                    val imgBytes = if (mediaKey != null) mediaMap[mediaKey] ?: mediaMap["ppt/$mediaKey"] else null
+
+                                    val normX = if (sldWidth > 0 && currentExtCX > 0) (currentOffX.toFloat() / sldWidth).coerceIn(0f, 0.95f) else 0.25f
+                                    val normY = if (sldHeight > 0 && currentExtCY > 0) (currentOffY.toFloat() / sldHeight).coerceIn(0f, 0.95f) else 0.25f
+                                    val normW = if (sldWidth > 0 && currentExtCX > 0) (currentExtCX.toFloat() / sldWidth).coerceIn(0.04f, 0.98f) else 0.50f
+                                    val normH = if (sldHeight > 0 && currentExtCY > 0) (currentExtCY.toFloat() / sldHeight).coerceIn(0.02f, 0.98f) else 0.50f
+
+                                    elements.add(
+                                        SlideElement(
+                                            type = SlideElementType.IMAGE,
+                                            normX = normX,
+                                            normY = normY,
+                                            normW = normW,
+                                            normH = normH,
+                                            imageBytes = imgBytes
+                                        )
+                                    )
+                                }
+                            }
+                            "graphicFrame" -> {
+                                inTable = false
+                                if (currentTableRows.isNotEmpty()) {
+                                    val normX = if (sldWidth > 0 && currentExtCX > 0) (currentOffX.toFloat() / sldWidth).coerceIn(0f, 0.95f) else 0.06f
+                                    val normY = if (sldHeight > 0 && currentExtCY > 0) (currentOffY.toFloat() / sldHeight).coerceIn(0f, 0.95f) else 0.25f
+                                    val normW = if (sldWidth > 0 && currentExtCX > 0) (currentExtCX.toFloat() / sldWidth).coerceIn(0.04f, 0.98f) else 0.88f
+                                    val normH = if (sldHeight > 0 && currentExtCY > 0) (currentExtCY.toFloat() / sldHeight).coerceIn(0.02f, 0.98f) else 0.50f
+
+                                    elements.add(
+                                        SlideElement(
+                                            type = SlideElementType.TABLE,
+                                            normX = normX,
+                                            normY = normY,
+                                            normW = normW,
+                                            normH = normH,
+                                            tableRows = currentTableRows.map { it.toList() }
+                                        )
+                                    )
+                                }
                             }
                         }
                     }
@@ -445,23 +820,37 @@ object OfficeDocumentEngine {
                 eventType = parser.next()
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error parsing slide XML: ${e.message}", e)
+            Log.e(TAG, "Error in parseSlideXmlAccurate: ${e.message}", e)
         }
 
-        val rawTitle = paragraphs.firstOrNull() ?: "Slide $slideNum"
-        val remaining = if (paragraphs.size > 1) paragraphs.drop(1) else emptyList()
-        val subtitle = if (remaining.isNotEmpty() && remaining.first().length < 120 && !remaining.first().startsWith("•")) {
-            remaining.first()
-        } else ""
+        val rawTitle = elements.firstOrNull { it.type == SlideElementType.TITLE }?.text
+            ?: allParagraphs.firstOrNull()
+            ?: "Slide $slideNum"
 
-        val bullets = (if (subtitle.isNotEmpty()) remaining.drop(1) else remaining)
-            .take(MAX_BULLETS_PER_SLIDE)
-            .ifEmpty { listOf("Slide $slideNum content") }
+        val subtitle = elements.firstOrNull { it.type == SlideElementType.SUBTITLE }?.text
+            ?: allParagraphs.getOrNull(1)?.takeIf { it.length < 120 && !it.startsWith("•") }
+            ?: ""
+
+        val bullets = elements.filter { it.type == SlideElementType.BULLET_LIST }
+            .flatMap { it.bulletPoints.ifEmpty { listOf(it.text) } }
+            .ifEmpty {
+                val rem = if (subtitle.isNotEmpty()) allParagraphs.drop(2) else allParagraphs.drop(1)
+                rem.take(MAX_BULLETS_PER_SLIDE)
+            }
+            .ifEmpty { listOf("Slide $slideNum Content") }
 
         val layout = when {
             slideNum == 1 && bullets.size <= 1 -> SlideLayout.TITLE_SLIDE
             bullets.size >= 4 -> SlideLayout.TWO_COLUMN
+            elements.any { it.type == SlideElementType.TABLE } -> SlideLayout.TITLE_AND_CONTENT
             else -> SlideLayout.TITLE_AND_CONTENT
+        }
+
+        // If no explicit elements were parsed from XML, construct structured standard elements
+        val finalElements = if (elements.isNotEmpty()) {
+            elements
+        } else {
+            buildDefaultSlideElements(rawTitle, subtitle, bullets, layout)
         }
 
         return SlideItem(
@@ -471,8 +860,326 @@ object OfficeDocumentEngine {
             notes = "",
             subtitle = subtitle,
             categoryTag = "SLIDE ${"%02d".format(slideNum)}",
-            layoutType = layout
+            layoutType = layout,
+            elements = finalElements,
+            aspectRatio = aspectRatio
         )
+    }
+
+    /**
+     * Constructs rich, positioned elements for slides lacking XML shape trees.
+     */
+    fun buildDefaultSlideElements(
+        title: String,
+        subtitle: String,
+        bulletPoints: List<String>,
+        layout: SlideLayout
+    ): List<SlideElement> {
+        val elements = mutableListOf<SlideElement>()
+        when (layout) {
+            SlideLayout.TITLE_SLIDE -> {
+                elements.add(
+                    SlideElement(
+                        type = SlideElementType.TITLE,
+                        text = title,
+                        normX = 0.08f,
+                        normY = 0.28f,
+                        normW = 0.84f,
+                        normH = 0.28f,
+                        fontSizeSp = 26f,
+                        isBold = true,
+                        textAlign = "CENTER"
+                    )
+                )
+                if (subtitle.isNotBlank()) {
+                    elements.add(
+                        SlideElement(
+                            type = SlideElementType.SUBTITLE,
+                            text = subtitle,
+                            normX = 0.10f,
+                            normY = 0.58f,
+                            normW = 0.80f,
+                            normH = 0.16f,
+                            fontSizeSp = 15f,
+                            isBold = false,
+                            textAlign = "CENTER"
+                        )
+                    )
+                }
+            }
+            SlideLayout.TWO_COLUMN -> {
+                elements.add(
+                    SlideElement(
+                        type = SlideElementType.TITLE,
+                        text = title,
+                        normX = 0.06f,
+                        normY = 0.08f,
+                        normW = 0.88f,
+                        normH = 0.16f,
+                        fontSizeSp = 21f,
+                        isBold = true
+                    )
+                )
+                val mid = (bulletPoints.size + 1) / 2
+                val col1 = bulletPoints.take(mid)
+                val col2 = bulletPoints.drop(mid)
+                elements.add(
+                    SlideElement(
+                        type = SlideElementType.BULLET_LIST,
+                        bulletPoints = col1,
+                        normX = 0.06f,
+                        normY = 0.28f,
+                        normW = 0.42f,
+                        normH = 0.62f,
+                        fontSizeSp = 13.5f
+                    )
+                )
+                elements.add(
+                    SlideElement(
+                        type = SlideElementType.BULLET_LIST,
+                        bulletPoints = col2,
+                        normX = 0.52f,
+                        normY = 0.28f,
+                        normW = 0.42f,
+                        normH = 0.62f,
+                        fontSizeSp = 13.5f
+                    )
+                )
+            }
+            SlideLayout.BIG_STAT -> {
+                elements.add(
+                    SlideElement(
+                        type = SlideElementType.TITLE,
+                        text = title,
+                        normX = 0.06f,
+                        normY = 0.08f,
+                        normW = 0.88f,
+                        normH = 0.16f,
+                        fontSizeSp = 21f,
+                        isBold = true
+                    )
+                )
+                elements.add(
+                    SlideElement(
+                        type = SlideElementType.STAT_HERO,
+                        text = bulletPoints.firstOrNull() ?: subtitle.ifBlank { "100%" },
+                        normX = 0.08f,
+                        normY = 0.28f,
+                        normW = 0.84f,
+                        normH = 0.38f,
+                        fontSizeSp = 46f,
+                        isBold = true,
+                        textAlign = "CENTER"
+                    )
+                )
+                if (bulletPoints.size > 1) {
+                    elements.add(
+                        SlideElement(
+                            type = SlideElementType.TEXT_BOX,
+                            text = bulletPoints.drop(1).joinToString(" • "),
+                            normX = 0.10f,
+                            normY = 0.70f,
+                            normW = 0.80f,
+                            normH = 0.18f,
+                            fontSizeSp = 14f,
+                            textAlign = "CENTER"
+                        )
+                    )
+                }
+            }
+            else -> {
+                elements.add(
+                    SlideElement(
+                        type = SlideElementType.TITLE,
+                        text = title,
+                        normX = 0.06f,
+                        normY = 0.08f,
+                        normW = 0.88f,
+                        normH = 0.16f,
+                        fontSizeSp = 21f,
+                        isBold = true
+                    )
+                )
+                if (subtitle.isNotBlank()) {
+                    elements.add(
+                        SlideElement(
+                            type = SlideElementType.SUBTITLE,
+                            text = subtitle,
+                            normX = 0.06f,
+                            normY = 0.22f,
+                            normW = 0.88f,
+                            normH = 0.10f,
+                            fontSizeSp = 13f
+                        )
+                    )
+                }
+                elements.add(
+                    SlideElement(
+                        type = SlideElementType.BULLET_LIST,
+                        bulletPoints = bulletPoints,
+                        normX = 0.06f,
+                        normY = if (subtitle.isNotBlank()) 0.34f else 0.26f,
+                        normW = 0.88f,
+                        normH = if (subtitle.isNotBlank()) 0.58f else 0.66f,
+                        fontSizeSp = 13.5f
+                    )
+                )
+            }
+        }
+        return elements
+    }
+
+    /**
+     * Generates a 100% genuine Microsoft PowerPoint OpenXML (.pptx) zip file.
+     */
+    fun exportToPptxZip(presentation: PresentationData): ByteArray {
+        val baos = ByteArrayOutputStream()
+        val zos = ZipOutputStream(baos)
+
+        val wEmu = presentation.slideWidthEmu
+        val hEmu = presentation.slideHeightEmu
+
+        // 1. [Content_Types].xml
+        val ctXml = buildString {
+            append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""")
+            append("""<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">""")
+            append("""<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>""")
+            append("""<Default Extension="xml" ContentType="application/xml"/>""")
+            append("""<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>""")
+            presentation.slides.forEachIndexed { i, _ ->
+                append("""<Override PartName="/ppt/slides/slide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>""")
+            }
+            append("""</Types>""")
+        }
+        zos.putNextEntry(ZipEntry("[Content_Types].xml"))
+        zos.write(ctXml.toByteArray(Charsets.UTF_8))
+        zos.closeEntry()
+
+        // 2. _rels/.rels
+        val rootRels = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="ppt/presentation.xml"/>
+</Relationships>"""
+        zos.putNextEntry(ZipEntry("_rels/.rels"))
+        zos.write(rootRels.toByteArray(Charsets.UTF_8))
+        zos.closeEntry()
+
+        // 3. ppt/_rels/presentation.xml.rels
+        val presRels = buildString {
+            append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""")
+            append("""<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">""")
+            presentation.slides.forEachIndexed { i, _ ->
+                append("""<Relationship Id="rId${i + 1}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slide" Target="slides/slide${i + 1}.xml"/>""")
+            }
+            append("""</Relationships>""")
+        }
+        zos.putNextEntry(ZipEntry("ppt/_rels/presentation.xml.rels"))
+        zos.write(presRels.toByteArray(Charsets.UTF_8))
+        zos.closeEntry()
+
+        // 4. ppt/presentation.xml
+        val presXml = buildString {
+            append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""")
+            append("""<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">""")
+            append("""<p:sldMasterIdLst/>""")
+            append("""<p:sldIdLst>""")
+            presentation.slides.forEachIndexed { i, _ ->
+                append("""<p:sldId id="${256 + i}" r:id="rId${i + 1}"/>""")
+            }
+            append("""</p:sldIdLst>""")
+            append("""<p:sldSz cx="$wEmu" cy="$hEmu" type="screen16x9"/>""")
+            append("""</p:presentation>""")
+        }
+        zos.putNextEntry(ZipEntry("ppt/presentation.xml"))
+        zos.write(presXml.toByteArray(Charsets.UTF_8))
+        zos.closeEntry()
+
+        // 5. ppt/slides/slide{N}.xml & rels
+        presentation.slides.forEachIndexed { i, slide ->
+            val slideNum = i + 1
+            val slideXml = buildSlideXml(slide, slideNum, wEmu, hEmu)
+            zos.putNextEntry(ZipEntry("ppt/slides/slide$slideNum.xml"))
+            zos.write(slideXml.toByteArray(Charsets.UTF_8))
+            zos.closeEntry()
+
+            val slideRelXml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"/>"""
+            zos.putNextEntry(ZipEntry("ppt/slides/_rels/slide$slideNum.xml.rels"))
+            zos.write(slideRelXml.toByteArray(Charsets.UTF_8))
+            zos.closeEntry()
+        }
+
+        zos.finish()
+        zos.close()
+        return baos.toByteArray()
+    }
+
+    private fun buildSlideXml(slide: SlideItem, slideNum: Int, wEmu: Long, hEmu: Long): String {
+        return buildString {
+            append("""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>""")
+            append("""<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">""")
+            append("""<p:cSld><p:spTree>""")
+            append("""<p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr>""")
+            append("""<p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>""")
+
+            var shapeId = 2
+            val elements = slide.elements.ifEmpty {
+                buildDefaultSlideElements(slide.title, slide.subtitle, slide.bulletPoints, slide.layoutType)
+            }
+
+            for (el in elements) {
+                val offX = (el.normX * wEmu).toLong()
+                val offY = (el.normY * hEmu).toLong()
+                val extCX = (el.normW * wEmu).toLong()
+                val extCY = (el.normH * hEmu).toLong()
+                val szVal = (el.fontSizeSp * 100).toInt()
+                val algn = when (el.textAlign) {
+                    "CENTER" -> "ctr"
+                    "RIGHT" -> "r"
+                    else -> "l"
+                }
+
+                append("""<p:sp>""")
+                append("""<p:nvSpPr><p:cNvPr id="$shapeId" name="Shape $shapeId"/><p:nvPr/></p:nvSpPr>""")
+                append("""<p:spPr><a:xfrm><a:off x="$offX" y="$offY"/><a:ext cx="$extCX" cy="$extCY"/></a:xfrm></p:spPr>""")
+                append("""<p:txBody><a:bodyPr/><a:lstStyle/>""")
+
+                val textLines = if (el.bulletPoints.isNotEmpty()) el.bulletPoints else el.text.lines()
+                for (line in textLines) {
+                    val safeLine = line.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+                    append("""<a:p><a:pPr algn="$algn"/><a:r><a:rPr sz="$szVal" b="${if (el.isBold) 1 else 0}"/><a:t>$safeLine</a:t></a:r></a:p>""")
+                }
+                append("""</p:txBody></p:sp>""")
+                shapeId++
+            }
+
+            append("""</p:spTree></p:cSld>""")
+            append("""<p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>""")
+            append("""</p:sld>""")
+        }
+    }
+
+    /**
+     * Converts a presentation into a clean, portable Markdown format.
+     */
+    fun presentationToMarkdown(presentation: PresentationData): String {
+        return buildString {
+            presentation.slides.forEachIndexed { idx, slide ->
+                append("# Slide ${idx + 1}: ${slide.title}\n")
+                if (slide.subtitle.isNotBlank()) {
+                    append("${slide.subtitle}\n")
+                }
+                slide.bulletPoints.forEach { pt ->
+                    append("- $pt\n")
+                }
+                if (slide.notes.isNotBlank()) {
+                    append("\n<!-- Speaker Notes: ${slide.notes} -->\n")
+                }
+                if (idx < presentation.slides.size - 1) {
+                    append("\n---\n\n")
+                }
+            }
+        }
     }
 
     /**
@@ -538,7 +1245,11 @@ object OfficeDocumentEngine {
         for (line in extractedLines) {
             val isHeading = line.length < 60 && !line.endsWith(".") && !line.startsWith("•")
             if (isHeading && currentBullets.isNotEmpty()) {
-                slides.add(SlideItem(slideIndex, currentTitle.ifBlank { "Slide $slideIndex" }, currentBullets.toList()))
+                val layout = if (slideIndex == 1 && currentBullets.size <= 1) SlideLayout.TITLE_SLIDE else SlideLayout.TITLE_AND_CONTENT
+                val slideTitle = currentTitle.ifBlank { "Slide $slideIndex" }
+                val slideBullets = currentBullets.toList()
+                val elements = buildDefaultSlideElements(slideTitle, "", slideBullets, layout)
+                slides.add(SlideItem(slideIndex, slideTitle, slideBullets, layoutType = layout, elements = elements))
                 slideIndex++
                 currentBullets.clear()
                 currentTitle = line
@@ -547,7 +1258,11 @@ object OfficeDocumentEngine {
             } else {
                 currentBullets.add(line)
                 if (currentBullets.size >= 8) {
-                    slides.add(SlideItem(slideIndex, currentTitle.ifBlank { "Slide $slideIndex" }, currentBullets.toList()))
+                    val layout = if (slideIndex == 1) SlideLayout.TITLE_SLIDE else SlideLayout.TITLE_AND_CONTENT
+                    val slideTitle = currentTitle.ifBlank { "Slide $slideIndex" }
+                    val slideBullets = currentBullets.toList()
+                    val elements = buildDefaultSlideElements(slideTitle, "", slideBullets, layout)
+                    slides.add(SlideItem(slideIndex, slideTitle, slideBullets, layoutType = layout, elements = elements))
                     slideIndex++
                     currentBullets.clear()
                     currentTitle = ""
@@ -557,11 +1272,16 @@ object OfficeDocumentEngine {
         }
 
         if (currentTitle.isNotEmpty() || currentBullets.isNotEmpty()) {
-            slides.add(SlideItem(slideIndex, currentTitle.ifBlank { "Slide $slideIndex" }, currentBullets.ifEmpty { listOf("Slide content") }))
+            val slideTitle = currentTitle.ifBlank { "Slide $slideIndex" }
+            val slideBullets = currentBullets.ifEmpty { listOf("Slide content") }
+            val layout = if (slideIndex == 1) SlideLayout.TITLE_SLIDE else SlideLayout.TITLE_AND_CONTENT
+            val elements = buildDefaultSlideElements(slideTitle, "", slideBullets, layout)
+            slides.add(SlideItem(slideIndex, slideTitle, slideBullets, layoutType = layout, elements = elements))
         }
 
         if (slides.isEmpty()) {
-            slides.add(SlideItem(1, title, listOf("PowerPoint 97-2003 Presentation Loaded")))
+            val elements = buildDefaultSlideElements(title, "", listOf("PowerPoint 97-2003 Presentation Loaded"), SlideLayout.TITLE_SLIDE)
+            slides.add(SlideItem(1, title, listOf("PowerPoint 97-2003 Presentation Loaded"), elements = elements))
         }
 
         return PresentationData(title = title, slides = slides)
@@ -682,15 +1402,19 @@ object OfficeDocumentEngine {
                 else -> SlideLayout.TITLE_AND_CONTENT
             }
 
+            val finalBullets = bulletLines.ifEmpty { listOf("Slide content") }
+            val elements = buildDefaultSlideElements(cleanTitle, subtitle, finalBullets, layout)
+
             slides.add(
                 SlideItem(
                     slideNumber = index,
                     title = cleanTitle,
-                    bulletPoints = bulletLines.ifEmpty { listOf("Slide content") },
+                    bulletPoints = finalBullets,
                     notes = if (subtitle.isNotEmpty()) "Speaker note: $subtitle" else "",
                     subtitle = subtitle,
                     categoryTag = categoryTag,
-                    layoutType = layout
+                    layoutType = layout,
+                    elements = elements
                 )
             )
             index++
@@ -698,13 +1422,16 @@ object OfficeDocumentEngine {
         }
 
         if (slides.isEmpty()) {
+            val defaultBullets = listOf("Universal Slide Reader", "Swipe or tap to navigate slides")
+            val elements = buildDefaultSlideElements(title, "", defaultBullets, SlideLayout.TITLE_SLIDE)
             slides.add(
                 SlideItem(
                     slideNumber = 1,
                     title = title,
-                    bulletPoints = listOf("Universal Slide Reader", "Swipe or tap to navigate slides"),
+                    bulletPoints = defaultBullets,
                     categoryTag = "PRESENTATION",
-                    layoutType = SlideLayout.TITLE_SLIDE
+                    layoutType = SlideLayout.TITLE_SLIDE,
+                    elements = elements
                 )
             )
         }
@@ -896,10 +1623,12 @@ object OfficeDocumentEngine {
     }
 
     private fun emptyPresentation(title: String, message: String): PresentationData {
+        val bullets = listOf(message, "Universal Presentation Reader")
+        val elements = buildDefaultSlideElements(title, "", bullets, SlideLayout.TITLE_SLIDE)
         return PresentationData(
             title = title,
             slides = listOf(
-                SlideItem(1, title, listOf(message, "Universal Presentation Reader"))
+                SlideItem(1, title, bullets, elements = elements)
             )
         )
     }

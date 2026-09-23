@@ -1,7 +1,6 @@
 package com.example.ui.screens
 
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -13,6 +12,7 @@ import com.example.ui.theme.*
 enum class CreateDocType {
     PDF,
     SPREADSHEET,
+    PRESENTATION,
     TEXT_NOTE
 }
 
@@ -22,6 +22,7 @@ fun DocumentCreatorDialog(
     onDismiss: () -> Unit,
     onCreatePdf: (title: String, body: String) -> Unit,
     onCreateSpreadsheet: (name: String, headers: List<String>, rows: List<List<String>>) -> Unit,
+    onCreatePresentation: (name: String, title: String, subtitle: String, bullets: List<String>) -> Unit = { _, _, _, _ -> },
     onCreateText: (name: String, content: String, ext: String) -> Unit
 ) {
     var titleOrName by remember { mutableStateOf("") }
@@ -35,6 +36,7 @@ fun DocumentCreatorDialog(
                 text = when (type) {
                     CreateDocType.PDF -> "Create New PDF"
                     CreateDocType.SPREADSHEET -> "Create New Spreadsheet"
+                    CreateDocType.PRESENTATION -> "Create PowerPoint Presentation (.pptx)"
                     CreateDocType.TEXT_NOTE -> "Create New Text File"
                 },
                 fontSize = 18.sp,
@@ -48,7 +50,13 @@ fun DocumentCreatorDialog(
                     value = titleOrName,
                     onValueChange = { titleOrName = it },
                     label = {
-                        Text(if (type == CreateDocType.PDF) "Document Title" else "File Name")
+                        Text(
+                            when (type) {
+                                CreateDocType.PDF -> "Document Title"
+                                CreateDocType.PRESENTATION -> "Presentation Name (e.g. Sales_Deck)"
+                                else -> "File Name"
+                            }
+                        )
                     },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
@@ -81,9 +89,15 @@ fun DocumentCreatorDialog(
                             when (type) {
                                 CreateDocType.PDF -> "Initial Body Content"
                                 CreateDocType.SPREADSHEET -> "Initial Column Headers (comma-separated)"
+                                CreateDocType.PRESENTATION -> "Slide Bullet Points (one per line)"
                                 CreateDocType.TEXT_NOTE -> "File Content"
                             }
                         )
+                    },
+                    placeholder = {
+                        if (type == CreateDocType.PRESENTATION) {
+                            Text("Point 1\nPoint 2\nPoint 3", fontSize = 13.sp)
+                        }
                     },
                     minLines = 3,
                     maxLines = 6,
@@ -109,6 +123,15 @@ fun DocumentCreatorDialog(
                             }
                             val sampleRow = headers.map { "" }
                             onCreateSpreadsheet(finalName, headers, listOf(sampleRow))
+                        }
+                        CreateDocType.PRESENTATION -> {
+                            val bullets = contentText.lines().map { it.trim() }.filter { it.isNotBlank() }
+                            onCreatePresentation(
+                                finalName,
+                                finalName.replace("_", " "),
+                                "Created with Universal Slide Studio",
+                                bullets
+                            )
                         }
                         CreateDocType.TEXT_NOTE -> onCreateText(finalName, contentText, extension)
                     }

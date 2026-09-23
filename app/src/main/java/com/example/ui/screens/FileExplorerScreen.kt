@@ -60,6 +60,7 @@ fun FileExplorerScreen(
     onImportUri: (Uri) -> Unit,
     onCreatePdf: (title: String, body: String) -> Unit,
     onCreateSpreadsheet: (name: String, headers: List<String>, rows: List<List<String>>) -> Unit,
+    onCreatePresentation: (name: String, title: String, subtitle: String, bullets: List<String>) -> Unit = { _, _, _, _ -> },
     onCreateText: (name: String, content: String, ext: String) -> Unit,
     onReplaySplash: () -> Unit
 ) {
@@ -283,6 +284,19 @@ fun FileExplorerScreen(
                             },
                             icon = { Icon(Icons.Default.TableChart, contentDescription = null, tint = ExcelGreen) },
                             text = { Text("Create New Spreadsheet") },
+                            containerColor = PureWhite,
+                            contentColor = TextPrimary,
+                            elevation = FloatingActionButtonDefaults.elevation(4.dp)
+                        )
+
+                        // New Presentation (.pptx)
+                        ExtendedFloatingActionButton(
+                            onClick = {
+                                showCreateMenu = false
+                                activeCreateDialog = CreateDocType.PRESENTATION
+                            },
+                            icon = { Icon(Icons.Default.Slideshow, contentDescription = null, tint = PptOrange) },
+                            text = { Text("Create Presentation (.pptx)") },
                             containerColor = PureWhite,
                             contentColor = TextPrimary,
                             elevation = FloatingActionButtonDefaults.elevation(4.dp)
@@ -599,6 +613,7 @@ fun FileExplorerScreen(
             onDismiss = { activeCreateDialog = null },
             onCreatePdf = onCreatePdf,
             onCreateSpreadsheet = onCreateSpreadsheet,
+            onCreatePresentation = onCreatePresentation,
             onCreateText = onCreateText
         )
     }

@@ -22,6 +22,7 @@ val BrandAccentLight = Color(0xFFEFF6FF)
 // Document Type Specific Accents
 val PdfRed = Color(0xFFDC2626)
 val PdfRedLight = Color(0xFFFEF2F2)
+val ErrorRed = Color(0xFFDC2626)
 
 val WordBlue = Color(0xFF2563EB)
 val WordBlueLight = Color(0xFFEFF6FF)

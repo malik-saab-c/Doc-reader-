@@ -177,6 +177,46 @@ class FileAppViewModel(application: Application) : AndroidViewModel(application)
         }
     }
 
+    fun createNewPresentation(name: String, title: String, subtitle: String, bullets: List<String>) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val cleanName = name.ifBlank { "New_Presentation" }.replace(" ", "_")
+            val docsDir = File(getApplication<Application>().filesDir, "documents")
+            if (!docsDir.exists()) docsDir.mkdirs()
+            val pptxFile = File(docsDir, "$cleanName.pptx")
+            val initialBullets = bullets.ifEmpty {
+                listOf(
+                    "Professional Slide Layout Architecture",
+                    "Add text, images, tables, and notes seamlessly",
+                    "Fully compatible with PowerPoint & Google Slides"
+                )
+            }
+            val initialSlide = com.example.engine.SlideItem(
+                slideNumber = 1,
+                title = title.ifBlank { "Presentation Overview" },
+                subtitle = subtitle.ifBlank { "Created with Universal Slide Studio" },
+                bulletPoints = initialBullets,
+                categoryTag = "SLIDE 01",
+                layoutType = com.example.engine.SlideLayout.TITLE_SLIDE,
+                elements = com.example.engine.OfficeDocumentEngine.buildDefaultSlideElements(
+                    title = title.ifBlank { "Presentation Overview" },
+                    subtitle = subtitle.ifBlank { "Created with Universal Slide Studio" },
+                    bulletPoints = initialBullets,
+                    layout = com.example.engine.SlideLayout.TITLE_SLIDE
+                )
+            )
+            val presData = com.example.engine.PresentationData(
+                title = title.ifBlank { "New Presentation" },
+                slides = listOf(initialSlide)
+            )
+            val pptxBytes = com.example.engine.OfficeDocumentEngine.exportToPptxZip(presData)
+            pptxFile.writeBytes(pptxBytes)
+            val updated = DocumentStorageManager.scanAllReadableDocuments(getApplication())
+            _documents.value = updated
+            val created = updated.firstOrNull { it.filePath == pptxFile.absolutePath }
+            if (created != null) _activeDocument.value = created
+        }
+    }
+
     fun createNewTextFile(name: String, content: String, ext: String = "txt") {
         viewModelScope.launch(Dispatchers.IO) {
             val cleanName = name.ifBlank { "New_Note" }.replace(" ", "_")
@@ -199,6 +239,21 @@ class FileAppViewModel(application: Application) : AndroidViewModel(application)
             val file = File(doc.filePath)
             if (file.exists()) {
                 file.writeText(newContent)
+                val updated = DocumentStorageManager.scanAllReadableDocuments(getApplication())
+                _documents.value = updated
+                _activeDocument.value = doc.copy(
+                    sizeBytes = file.length(),
+                    lastModified = file.lastModified()
+                )
+            }
+        }
+    }
+
+    fun saveEditedBinaryContent(doc: DocumentItem, newBytes: ByteArray) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val file = File(doc.filePath)
+            if (file.exists()) {
+                file.writeBytes(newBytes)
                 val updated = DocumentStorageManager.scanAllReadableDocuments(getApplication())
                 _documents.value = updated
                 _activeDocument.value = doc.copy(

@@ -84,25 +84,98 @@ Strict adherence to APK size budget (< 25 MB) and 100% offline isolation without
             )
         }
 
-        // 4. Sample Presentation PPTX
+        // 4. Sample Presentation PPTX (Real Binary OpenXML .pptx)
         val pptxFile = File(docsDir, "Executive_Strategy_Deck.pptx")
-        if (!pptxFile.exists()) {
-            pptxFile.writeText(
-                """# Slide 1: All File Reader Architecture
-Executive presentation designed by developer Sir Ghulam Mustafa
-Zero-bloat native processing engine
----
-# Slide 2: Market Opportunities & Growth
-- 98% faster startup compared to cloud-dependent readers
-- Complete privacy protection with offline-first sandboxing
-- Native hardware acceleration for PDF and spreadsheet grids
----
-# Slide 3: Roadmap & Next Milestones
-- Advanced formula builder for complex financial models
-- Multi-column document layout customization
-- Direct document signing and export tools
-"""
+        if (!pptxFile.exists() || pptxFile.length() < 1000) {
+            val sampleDeck = PresentationData(
+                title = "Executive Strategy Deck",
+                slides = listOf(
+                    SlideItem(
+                        slideNumber = 1,
+                        title = "Executive Strategy Deck",
+                        subtitle = "Built with Universal Presentation Studio • 100% Native Architecture",
+                        bulletPoints = listOf("High-fidelity desktop presentation reader", "Full OpenXML shape, image, and table support"),
+                        categoryTag = "EXECUTIVE",
+                        layoutType = SlideLayout.TITLE_SLIDE,
+                        elements = OfficeDocumentEngine.buildDefaultSlideElements(
+                            title = "Executive Strategy Deck",
+                            subtitle = "Built with Universal Presentation Studio • 100% Native Architecture",
+                            bulletPoints = listOf("High-fidelity desktop presentation reader", "Full OpenXML shape, image, and table support"),
+                            layout = SlideLayout.TITLE_SLIDE
+                        )
+                    ),
+                    SlideItem(
+                        slideNumber = 2,
+                        title = "Market Opportunities & Growth",
+                        subtitle = "Performance Benchmarks & Metrics",
+                        bulletPoints = listOf(
+                            "98% faster startup compared to heavy cloud-dependent readers",
+                            "Complete offline privacy protection with zero tracking",
+                            "High-performance vector rendering for shapes & tables",
+                            "Full desktop PowerPoint (.pptx) layout and element support"
+                        ),
+                        categoryTag = "PERFORMANCE",
+                        layoutType = SlideLayout.TITLE_AND_CONTENT,
+                        elements = OfficeDocumentEngine.buildDefaultSlideElements(
+                            title = "Market Opportunities & Growth",
+                            subtitle = "Performance Benchmarks & Metrics",
+                            bulletPoints = listOf(
+                                "98% faster startup compared to heavy cloud-dependent readers",
+                                "Complete offline privacy protection with zero tracking",
+                                "High-performance vector rendering for shapes & tables",
+                                "Full desktop PowerPoint (.pptx) layout and element support"
+                            ),
+                            layout = SlideLayout.TITLE_AND_CONTENT
+                        )
+                    ),
+                    SlideItem(
+                        slideNumber = 3,
+                        title = "Platform Feature Comparison",
+                        subtitle = "Native Universal Engine vs Cloud Tools",
+                        bulletPoints = listOf(
+                            "Instant Native Rendering with Zero Latency",
+                            "Zero Background Battery Drain",
+                            "Normalized Coordinate Geometry Engine",
+                            "Full In-App Slide Editing, Sorter, and Presentation Mode"
+                        ),
+                        categoryTag = "COMPARISON",
+                        layoutType = SlideLayout.TWO_COLUMN,
+                        elements = OfficeDocumentEngine.buildDefaultSlideElements(
+                            title = "Platform Feature Comparison",
+                            subtitle = "Native Universal Engine vs Cloud Tools",
+                            bulletPoints = listOf(
+                                "Instant Native Rendering with Zero Latency",
+                                "Zero Background Battery Drain",
+                                "Normalized Coordinate Geometry Engine",
+                                "Full In-App Slide Editing, Sorter, and Presentation Mode"
+                            ),
+                            layout = SlideLayout.TWO_COLUMN
+                        )
+                    ),
+                    SlideItem(
+                        slideNumber = 4,
+                        title = "Processing Speed Index",
+                        subtitle = "Universal Architecture Benchmark",
+                        bulletPoints = listOf(
+                            "100% Native Pure-Kotlin OpenXML Geometry Parser",
+                            "Full Support for Microsoft PowerPoint & Google Slides"
+                        ),
+                        categoryTag = "EFFICIENCY",
+                        layoutType = SlideLayout.BIG_STAT,
+                        elements = OfficeDocumentEngine.buildDefaultSlideElements(
+                            title = "Processing Speed Index",
+                            subtitle = "Universal Architecture Benchmark",
+                            bulletPoints = listOf(
+                                "100% Native Pure-Kotlin OpenXML Geometry Parser",
+                                "Full Support for Microsoft PowerPoint & Google Slides"
+                            ),
+                            layout = SlideLayout.BIG_STAT
+                        )
+                    )
+                )
             )
+            val pptxBytes = OfficeDocumentEngine.exportToPptxZip(sampleDeck)
+            pptxFile.writeBytes(pptxBytes)
         }
 
         // 5. Sample Code JSON configuration

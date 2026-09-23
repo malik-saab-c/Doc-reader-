@@ -84,7 +84,13 @@ class MainActivity : ComponentActivity() {
                                 DocumentType.PRESENTATION -> {
                                     PresentationViewerScreen(
                                         document = doc,
-                                        onBack = { viewModel.closeActiveDocument() }
+                                        onBack = { viewModel.closeActiveDocument() },
+                                        onSaveContent = { newContent ->
+                                            viewModel.saveEditedContent(doc, newContent)
+                                        },
+                                        onSaveBinaryContent = { newBytes ->
+                                            viewModel.saveEditedBinaryContent(doc, newBytes)
+                                        }
                                     )
                                 }
 
@@ -137,6 +143,9 @@ class MainActivity : ComponentActivity() {
                                 onCreatePdf = { title, body -> viewModel.createNewPdf(title, body) },
                                 onCreateSpreadsheet = { name, headers, rows ->
                                     viewModel.createNewSpreadsheet(name, headers, rows)
+                                },
+                                onCreatePresentation = { name, title, subtitle, bullets ->
+                                    viewModel.createNewPresentation(name, title, subtitle, bullets)
                                 },
                                 onCreateText = { name, content, ext ->
                                     viewModel.createNewTextFile(name, content, ext)
