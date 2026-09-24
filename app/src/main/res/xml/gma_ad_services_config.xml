@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ad-services-config>
+    <!-- Gracefully disable Privacy Sandbox attribution measurement binding when the system service is unavailable -->
+    <attribution allowAdAttribution="false" />
+</ad-services-config>

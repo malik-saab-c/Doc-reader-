@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.content.FileProvider
 import com.example.model.DocumentItem
 import com.example.model.DocumentType
+import com.example.ui.components.AdMobBanner
 import com.example.ui.theme.*
 import com.example.util.StoragePermissionHelper
 import com.example.viewmodel.SortOption
@@ -331,6 +332,9 @@ fun FileExplorerScreen(
                     )
                 }
             }
+        },
+        bottomBar = {
+            AdMobBanner()
         },
         containerColor = PureWhite
     ) { innerPadding ->

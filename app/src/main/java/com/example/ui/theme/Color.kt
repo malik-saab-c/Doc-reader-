@@ -29,6 +29,7 @@ val WordBlueLight = Color(0xFFEFF6FF)
 
 val ExcelGreen = Color(0xFF16A34A)
 val ExcelGreenLight = Color(0xFFF0FDF4)
+val SuccessGreen = Color(0xFF16A34A)
 
 val PptOrange = Color(0xFFEA580C)
 val PptOrangeLight = Color(0xFFFFF7ED)

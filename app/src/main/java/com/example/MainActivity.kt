@@ -26,6 +26,15 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 
+        // Initialize Google Mobile Ads (AdMob) SDK
+        try {
+            com.google.android.gms.ads.MobileAds.initialize(this) { status ->
+                android.util.Log.d("MainActivity", "Google Mobile Ads initialized: $status")
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("MainActivity", "Failed to initialize AdMob: ${e.message}", e)
+        }
+
         handleIntent(intent)
 
         setContent {
