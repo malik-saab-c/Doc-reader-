@@ -40,6 +40,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             MyApplicationTheme {
                 val showSplash by viewModel.showSplash.collectAsState()
+                val isPrivacyAgreed by viewModel.isPrivacyAgreed.collectAsState()
                 val activeDoc by viewModel.activeDocument.collectAsState()
                 val documents by viewModel.documents.collectAsState()
                 val selectedCategory by viewModel.selectedCategory.collectAsState()
@@ -49,14 +50,20 @@ class MainActivity : ComponentActivity() {
                 val isScanning by viewModel.isScanning.collectAsState()
 
                 Crossfade(
-                    targetState = Pair(showSplash, activeDoc),
+                    targetState = Triple(showSplash, isPrivacyAgreed, activeDoc),
                     label = "screen_transition",
                     modifier = Modifier.fillMaxSize()
-                ) { (splash, doc) ->
+                ) { (splash, agreed, doc) ->
                     when {
                         splash -> {
                             SplashScreen(
                                 onFinished = { viewModel.dismissSplash() }
+                            )
+                        }
+
+                        !agreed -> {
+                            PrivacyPolicyScreen(
+                                onAgreeAndContinue = { viewModel.agreeToPrivacyPolicy() }
                             )
                         }
 

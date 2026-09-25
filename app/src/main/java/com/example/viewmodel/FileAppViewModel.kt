@@ -50,6 +50,11 @@ class FileAppViewModel(application: Application) : AndroidViewModel(application)
     private val _showSplash = MutableStateFlow(true)
     val showSplash: StateFlow<Boolean> = _showSplash.asStateFlow()
 
+    private val _isPrivacyAgreed = MutableStateFlow(
+        com.example.util.PrivacyConsentManager.isPrivacyPolicyAgreed(application)
+    )
+    val isPrivacyAgreed: StateFlow<Boolean> = _isPrivacyAgreed.asStateFlow()
+
     private val _isScanning = MutableStateFlow(false)
     val isScanning: StateFlow<Boolean> = _isScanning.asStateFlow()
 
@@ -77,6 +82,11 @@ class FileAppViewModel(application: Application) : AndroidViewModel(application)
 
     fun dismissSplash() {
         _showSplash.value = false
+    }
+
+    fun agreeToPrivacyPolicy() {
+        com.example.util.PrivacyConsentManager.setPrivacyPolicyAgreed(getApplication(), true)
+        _isPrivacyAgreed.value = true
     }
 
     fun replaySplash() {

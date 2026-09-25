@@ -683,6 +683,21 @@ fun FileExplorerScreen(
                 ) {
                     Text("Close")
                 }
+            },
+            dismissButton = {
+                OutlinedButton(
+                    onClick = {
+                        com.example.util.PrivacyConsentManager.openPrivacyPolicyWeb(context)
+                    }
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Shield,
+                        contentDescription = null,
+                        modifier = Modifier.size(16.dp)
+                    )
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Privacy Policy")
+                }
             }
         )
     }
